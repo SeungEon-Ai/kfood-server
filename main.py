@@ -49,6 +49,7 @@ async def predict(file: UploadFile = File(...)):
         # 2. 전처리
         image = image.resize((224, 224))
         img_array = np.array(image, dtype=np.float32)
+        img_array = img_array / 127.5 - 1.0  # [0,255] -> [-1,1]
         img_array = np.expand_dims(img_array, axis=0)
         
         # 3. TFLite 추론
