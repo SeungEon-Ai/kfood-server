@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import tflite_runtime.interpreter as tflite
+from ai_edge_litert.interpreter import Interpreter
 from PIL import Image
 import numpy as np
 import json
@@ -19,7 +19,7 @@ app.add_middleware(
 
 # TFLite 모델 + 클래스 이름 로드
 print("Loading TFLite model...")
-interpreter = tflite.Interpreter(model_path='kfood_dynamic.tflite')
+interpreter = Interpreter(model_path='kfood_dynamic.tflite')
 interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
