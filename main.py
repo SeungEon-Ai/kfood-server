@@ -17,16 +17,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# TFLite 모델 + 클래스 이름 로드
+# TFLite 모델 로드
 print("Loading TFLite model...")
 interpreter = Interpreter(model_path='kfood_dynamic.tflite')
 interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
+# 클래스 이름 로드
 with open('class_names.json', 'r', encoding='utf-8') as f:
     class_names = json.load(f)
 print(f"Model loaded. {len(class_names)} classes ready.")
+
+# 영양정보 로드
+with open('nutrition_data.json', 'r', encoding='utf-8') as f:
+    nutrition_data = json.load(f)
+print(f"Nutrition data loaded. {len(nutrition_data)} foods.")
 
 
 @app.get("/")
@@ -34,8 +40,20 @@ def root():
     return {
         "status": "ok",
         "classes": len(class_names),
+        "nutrition": len(nutrition_data),
         "message": "한식 분류 API 작동 중"
     }
+
+
+@app.get("/nutrition/{food_name}")
+def get_nutrition(food_name: str):
+    """음식 이름으로 영양정보 조회"""
+    if food_name in nutrition_data:
+        return {
+            "name_ko": food_name,
+            **nutrition_data[food_name]
+        }
+    raise HTTPException(status_code=404, detail=f"'{food_name}' 영양정보 없음")
 
 
 @app.post("/predict")
@@ -46,10 +64,10 @@ async def predict(file: UploadFile = File(...)):
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert('RGB')
         
-        # 2. 전처리
+        # 2. 전처리 (정규화 빼기 - 모델 내부에 Rescaling 있음)
         image = image.resize((224, 224))
         img_array = np.array(image, dtype=np.float32)
-        #img_array = img_array / 127.5 - 1.0  # [0,255] -> [-1,1]
+        # img_array = img_array / 127.5 - 1.0  # 주석 처리
         img_array = np.expand_dims(img_array, axis=0)
         
         # 3. TFLite 추론
