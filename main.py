@@ -1,11 +1,14 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from ai_edge_litert.interpreter import Interpreter
 from PIL import Image
 import numpy as np
 import json
 import io
 import os
+import google.generativeai as genai
+from groq import Groq
 
 app = FastAPI(title="한식 분류 API")
 
@@ -34,6 +37,40 @@ with open('nutrition_data.json', 'r', encoding='utf-8') as f:
     nutrition_data = json.load(f)
 print(f"Nutrition data loaded. {len(nutrition_data)} foods.")
 
+# LLM 설정
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+
+# Gemini 초기화
+gemini_model = None
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    gemini_model = genai.GenerativeModel('gemini-2.0-flash-exp')
+    print("Gemini API ready.")
+
+# Groq 초기화
+groq_client = None
+if GROQ_API_KEY:
+    groq_client = Groq(api_key=GROQ_API_KEY)
+    print("Groq API ready.")
+
+
+# 챗봇 시스템 프롬프트
+SYSTEM_PROMPT = """당신은 한식 전문가 AI입니다. 사용자가 한국 음식에 대해 물어보면 친근하고 정확하게 답변합니다.
+
+규칙:
+- 답변은 3~5문장으로 간결하게
+- 질문이 한국어면 한국어로, 영어면 영어로 답변
+- 모르는 정보는 솔직히 모른다고 답변
+- 영양/건강 정보는 일반적인 가이드 수준으로 (의학 조언 X)
+- 친근한 어투 사용"""
+
+
+# 요청 모델
+class ChatRequest(BaseModel):
+    message: str
+    food_context: str | None = None  # 현재 보고 있는 음식 (선택)
+
 
 @app.get("/")
 def root():
@@ -41,6 +78,8 @@ def root():
         "status": "ok",
         "classes": len(class_names),
         "nutrition": len(nutrition_data),
+        "gemini": gemini_model is not None,
+        "groq": groq_client is not None,
         "message": "한식 분류 API 작동 중"
     }
 
@@ -60,22 +99,17 @@ def get_nutrition(food_name: str):
 async def predict(file: UploadFile = File(...)):
     """이미지 받아서 Top-5 음식 예측 반환"""
     try:
-        # 1. 이미지 읽기
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert('RGB')
         
-        # 2. 전처리 (정규화 빼기 - 모델 내부에 Rescaling 있음)
         image = image.resize((224, 224))
         img_array = np.array(image, dtype=np.float32)
-        # img_array = img_array / 127.5 - 1.0  # 주석 처리
         img_array = np.expand_dims(img_array, axis=0)
         
-        # 3. TFLite 추론
         interpreter.set_tensor(input_details[0]['index'], img_array)
         interpreter.invoke()
         predictions = interpreter.get_tensor(output_details[0]['index'])[0]
         
-        # 4. Top-5 추출
         top5_idx = np.argsort(predictions)[-5:][::-1]
         results = [
             {
@@ -89,6 +123,54 @@ async def predict(file: UploadFile = File(...)):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    """LLM 챗봇 (Gemini -> Groq 자동 전환)"""
+    
+    # 사용자 메시지 구성
+    user_message = request.message
+    if request.food_context:
+        user_message = f"[현재 보고 있는 음식: {request.food_context}]\n\n{user_message}"
+    
+    # 1차 시도: Gemini
+    if gemini_model:
+        try:
+            response = gemini_model.generate_content(
+                f"{SYSTEM_PROMPT}\n\n사용자: {user_message}"
+            )
+            return {
+                "reply": response.text,
+                "provider": "gemini"
+            }
+        except Exception as e:
+            print(f"Gemini failed: {e}, trying Groq...")
+    
+    # 2차 시도: Groq
+    if groq_client:
+        try:
+            response = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_message}
+                ],
+                max_tokens=500,
+                temperature=0.7
+            )
+            return {
+                "reply": response.choices[0].message.content,
+                "provider": "groq"
+            }
+        except Exception as e:
+            print(f"Groq failed: {e}")
+    
+    # 둘 다 실패
+    raise HTTPException(
+        status_code=503,
+        detail="챗봇 서비스 일시 불가. 잠시 후 다시 시도해주세요."
+    )
 
 
 if __name__ == "__main__":
