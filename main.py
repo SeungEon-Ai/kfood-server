@@ -45,7 +45,7 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 gemini_model = None
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel('gemini-2.0-flash-exp')
+    gemini_model = genai.GenerativeModel('gemini-2.5-flash')
     print("Gemini API ready.")
 
 # Groq 초기화
